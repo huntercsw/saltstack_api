@@ -1,0 +1,175 @@
+import requests
+import json
+# disable warning 'InsecureRequestWarning'
+from urllib3.connectionpool import InsecureRequestWarning
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+
+class ErrorCode(object):
+    NoResponse = 500
+    JsonError = 600
+    ParamError = 700
+
+
+class SaltApi(object):
+    def __init__(self, salt_api_url, salt_api_username, salt_api_password):
+        """
+        :param salt_api_url: "https://0.0.0.0:443"
+        :param salt_api_username: "salt api user name"
+        :param salt_api_password: "salt api password"
+
+        """
+        self.salt_api_url = salt_api_url
+        self.username = salt_api_username
+        self.password = salt_api_password
+
+    @property
+    def salt_api_token(self):
+        headers = {
+            "Accept": "application / x - yaml"
+        }
+        prefix = "/login"
+        request_params = {
+            "username": self.username,
+            "password": self.password,
+            "eauth": "pam"
+        }
+        # login url
+        url = self.salt_api_url + prefix
+
+        # if the request is "https", need 'verify=False'
+        response = requests.post(url, request_params, headers, verify=False)
+        token = response.json().get("return")[0].get("token")
+        return token
+
+    def salt_minion_get(self, minion_id=None):
+        """
+        get minions list , if minion id input ,detail of this minion will be got
+        :param minion_id: type:str . Wildcard is possible, e.g "node*" . Default is "*"
+        :return: type:dict . (keys are: minion id, value is detail of salt "grains.items")
+        """
+        uri = "/minions"
+        headers = {
+            "Accept": "application/json",
+            "X-Auth-Token": self.salt_api_token
+        }
+        if minion_id is not None:
+            url = "%s%s/%s" % (self.salt_api_url, uri, minion_id)
+        else:
+            url = self.salt_api_url + uri
+        print(url)
+        try:
+            res = requests.get(url, headers=headers, verify=False)
+        except Exception as e:
+            print(e)
+            return ErrorCode.NoResponse
+        try:
+            res = json.loads(res.content).get("return")
+        except Exception as e:
+            print(e)
+            return ErrorCode.JsonError
+        return res[0]
+
+    def salt_minion_post(self, target="*", method=None):
+        """
+        Start an execution command and immediately return the job id
+        :param target: type:str . Wildcard is possible, e.g "node*" . Default is "*", and minion id is possible
+        :param method: type: str . Execution command
+        :return: type: dict . return job id and list of minions immediately. (keys are: "jid", "mioions")
+        """
+        uri = "/minions"
+        if method is None:
+            return ErrorCode.ParamError
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-Auth-Token": self.salt_api_token
+        }
+        url = self.salt_api_url + uri
+        params = [{
+            "tgt": target,
+            "fun": method
+        }]
+        try:
+            res = requests.post(url, data=json.dumps(params), headers=headers, verify=False)
+        except Exception as e:
+            print(e)
+            return ErrorCode.NoResponse
+        try:
+            res = json.loads(res.content).get("return")
+        except Exception as e:
+            print(e)
+            return ErrorCode.JsonError
+        return res[0]
+
+    def salt_jobs(self, job_id):
+        """
+        show a single job from the job cache
+        :return: type: dict. Content is job information(keys are minion id)
+        """
+        uri = "/jobs"
+
+        headers = {
+            "Accept": "application/json",
+            "X-Auth-Token": self.salt_api_token
+        }
+        url = self.salt_api_url + uri + "/%s" % (job_id,)
+        try:
+            res = requests.get(url, headers=headers, verify=False)
+        except Exception as e:
+            print(e)
+            return ErrorCode.NoResponse
+        try:
+            job_detail = json.loads(res.content).get("info")[0].get("Result")
+        except Exception as e:
+            print(e)
+            return ErrorCode.JsonError
+        return job_detail
+
+    def salt_run(self, target, method, client="local", arguments=None):
+        """
+        Run commands
+        :param target: type:str . Wildcard is possible, e.g "node*" . Default is "*", and minion id is possible
+        :param method: type: str . command
+        :param client: client="local" run execution modules synchronously;
+                        client="local_async" run execution modules asynchronously
+        :return: type: dict (key: minion id, value: result)
+        """
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-Auth_Token": self.salt_api_token
+        }
+        request_params = {
+            "tgt": target,
+            "fun": method,
+            "client": client,
+        }
+        if arguments is not None:
+            request_params["arg"] = arguments
+        try:
+            res = requests.post(self.salt_api_url, data=json.dumps(request_params), headers=headers, verify=False)
+        except ErrorCode as e:
+            print(e)
+            return ErrorCode.NoResponse
+        try:
+            res = json.loads(res.content).get("return")[0]
+        except Exception as e:
+            print(e)
+            return ErrorCode.JsonError
+        return res
+
+
+if __name__ == '__main__':
+    salt_api_url = "https://192.168.0.30:9000"
+    salt_api_username = "saltapi"
+    salt_api_password = "123"
+
+    salt_api = SaltApi(salt_api_url, salt_api_username, salt_api_password)
+
+    # job_id = salt_api.minion_post(target="x1*", method="hosts.list_hosts").get("jid")
+    #
+    # j = salt_api.jobs(job_id)
+    # print(j)
+    res = salt_api.salt_run(target="x1*", method="nginx.version")
+    print(res)
